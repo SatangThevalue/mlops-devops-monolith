@@ -2,11 +2,11 @@
 
 ### 🟢 To Do / Not Started
 
-- [ ] **0.0 FOUNDATION SETUP (Goal)**
-- [ ] 0.1 ออกแบบโครงสร้าง Repository และโฟลเดอร์หลัก @BothStacks
-- [ ] 0.2 ติดตั้ง Prerequisite บน Local (Docker, Ansible CLIs) @BothStacks
-- [ ] 0.3 กำหนดค่า Secret และเข้ารหัสด้วย Ansible Vault @FullStack
-- [ ] 0.4 สร้าง Base Playbook สำหรับติดตั้ง Docker บน VM @FullStack
+- [X] **0.0 FOUNDATION SETUP (Goal)**
+- [X] 0.1 ออกแบบโครงสร้าง Repository และโฟลเดอร์หลัก @BothStacks
+- [X] 0.2 ติดตั้ง Prerequisite บน Local (Docker, Ansible CLIs) @BothStacks
+- [X] 0.3 กำหนดค่า Secret และเข้ารหัสด้วย Ansible Vault @FullStack
+- [X] 0.4 สร้าง Base Playbook สำหรับติดตั้ง Docker บน VM @FullStack
 
 ---
 

@@ -1,0 +1,375 @@
+version: "3.8"
+
+services:
+  # --- 1. CORE INFRASTRUCTURE (Secrets, DB, MQ, Cache, Storage) ---
+
+  # 1.1 Consul Server (Vault Storage Backend)
+  consul:
+    image: consul:1.15.4
+    container_name: consul
+    restart: unless-stopped
+    command: "agent -server -bootstrap -client=0.0.0.0 -data-dir=/consul/data -ui"
+    volumes:
+      - consul_data:/consul/data
+    labels:
+      - "traefik.enable=true"
+      # HTTP Router (Redirect to HTTPS)
+      - "traefik.http.routers.consul-http.rule=Host(`consul.localhost`)"
+      - "traefik.http.routers.consul-http.entrypoints=web"
+      - "traefik.http.routers.consul-http.middlewares=consul-redirect"
+      # HTTPS Router
+      - "traefik.http.routers.consul-https.rule=Host(`consul.localhost`)"
+      - "traefik.http.routers.consul-https.entrypoints=websecure"
+      - "traefik.http.routers.consul-https.tls=true"
+      # Service Target
+      - "traefik.http.services.consul-service.loadbalancer.server.port=8500"
+      # Middleware for HTTP to HTTPS Redirect
+      - "traefik.http.middlewares.consul-redirect.redirectscheme.scheme=https"
+    healthcheck:
+      test: ["CMD", "consul", "members"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # 1.2 Vault Serveเพื่อสร้าง Clusterr (Secret Management)
+  vault:
+    image: hashicorp/vault:1.20.0
+    container_name: vault
+    restart: unless-stopped
+    cap_add:
+      - IPC_LOCK
+    ports:
+      - "8200"
+    environment:
+      - VAULT_ADDR=http://vault:8200
+      - VAULT_API_ADDR=https://vault.${DOMAIN_NAME}
+      - VAULT_MAX_LEASE_TTL=8760h
+      - VAULT_DEFAULT_LEASE_TTL=768h
+      - VAULT_LOG_LEVEL=info
+    volumes:
+      - vault_config:/vault/config
+      - vault_file:/vault/file
+      - vault_logs:/vault/logs
+    depends_on:
+      consul:
+        condition: service_healthy
+    labels:
+      - "traefik.enable=true"
+      # HTTP Router (Redirect to HTTPS)
+      - "traefik.http.routers.vault-http.rule=Host(`vault.localhost`)"
+      - "traefik.http.routers.vault-http.entrypoints=web"
+      - "traefik.http.routers.vault-http.middlewares=vault-redirect"
+      # HTTPS Router
+      - "traefik.http.routers.vault-https.rule=Host(`vault.localhost`)"
+      - "traefik.http.routers.vault-https.entrypoints=websecure"
+      - "traefik.http.routers.vault-https.tls=true"
+      # Service Target (Vault UI/API run on port 8200)
+      - "traefik.http.services.vault-service.loadbalancer.server.port=8200"
+      # Middleware for HTTP to HTTPS Redirect
+      - "traefik.http.middlewares.vault-redirect.redirectscheme.scheme=https"
+
+  # 1.3 PostgreSQL DB
+  db:
+    image: postgres:15-alpine
+    container_name: db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${DB_USER}
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+      POSTGRES_DB: ${DB_PLANE}
+      DB_PREFECT_USER: ${DB_PREFECT_USER}
+      DB_PREFECT_PASSWORD: ${DB_PREFECT_PASSWORD}
+      DB_PREFECT_NAME: ${DB_PREFECT_NAME}
+    volumes:
+      - ../data/postgres:/var/lib/postgresql/data
+      # แก้ไข PATH ใหม่ตามที่ร้องขอ: ./config/postgres/
+      - ./config/postgres/run-prefect-init.sh:/docker-entrypoint-initdb.d/run-prefect-init.sh:ro
+      - ./config/postgres/prefect_user_db_init.sql:/docker-entrypoint-initdb.d/prefect_user_db_init.sql.template:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER} -d ${DB_PLANE}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # 1.4 Redis (Valkey)
+  redis:
+    image: valkey/valkey:7.2.5-alpine
+    container_name: redis
+    volumes:
+      - redisdata:/data
+    restart: unless-stopped
+
+  # 1.5 RabbitMQ
+  plane-mq:
+    image: rabbitmq:3.13.6-management-alpine
+    container_name: plane-mq
+    environment:
+      RABBITMQ_DEFAULT_USER: ${MQ_USER}
+      RABBITMQ_DEFAULT_PASS: ${MQ_PASSWORD}
+      RABBITMQ_DEFAULT_VHOST: ${MQ_VHOST}
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+    restart: unless-stopped
+
+  # 1.6 MinIO
+  minio:
+    image: minio/minio:latest
+    container_name: minio
+    command: server /export --console-address ":9090"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+    volumes:
+      - minio_data:/export
+    restart: unless-stopped
+
+  # --- 2. MLOPS SERVICES ---
+
+  # 2.1 Prefect Server
+  prefect:
+    image: prefecthq/prefect:3-latest
+    container_name: prefect
+    restart: unless-stopped
+    ports:
+      - "4200:4200"
+    environment:
+      PREFECT_SERVER_DATABASE_CONNECTION_URL: postgresql+asyncpg://${DB_PREFECT_USER}:${DB_PREFECT_PASSWORD}@db:5432/${DB_PREFECT_NAME}
+      PREFECT_SERVER_API_URL: http://prefect:4200/api
+    command:
+      - prefect
+      - server
+      - start
+      - --host
+      - 0.0.0.0
+      - --log-level
+      - INFO
+    depends_on:
+      db:
+        condition: service_healthy
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.prefect-https.rule=Host(`prefect.localhost`)"
+      - "traefik.http.routers.prefect-https.entrypoints=websecure"
+      - "traefik.http.routers.prefect-https.tls=true"
+      - "traefik.http.services.prefect-service.loadbalancer.server.port=4200"
+
+  # 2.2 MLflow Tracking Server
+  mlflow:
+    image: ghcr.io/mlflow/mlflow:latest
+    container_name: mlflow
+    restart: unless-stopped
+    ports:
+      - "5000:5000"
+    environment:
+      MLFLOW_TRACKING_URI: postgresql://${DB_USER}:${DB_PASSWORD}@db:5432/${DB_PLANE}
+      MLFLOW_TRACKING_ARTIFACT_DESTINATION: /mlflow/artifacts
+      MLFLOW_TRACKING_HOST: 0.0.0.0
+    volumes:
+      - ../data/mlflow:/mlflow/artifacts
+    depends_on:
+      db:
+        condition: service_healthy
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.mlflow-https.rule=Host(`mlflow.localhost`)"
+      - "traefik.http.routers.mlflow-https.entrypoints=websecure"
+      - "traefik.http.routers.mlflow-https.tls=true"
+      - "traefik.http.services.mlflow-service.loadbalancer.server.port=5000"
+
+  # --- 3. PROJECT MANAGEMENT (PLANE) - FULL SET ---
+
+  # 3.1 Plane Migrator
+  plane-migrator:
+    image: artifacts.plane.so/makeplane/plane-backend:v1.0.0
+    container_name: plane-migrator
+    command: ./bin/docker-entrypoint-migrator.sh
+    environment:
+      SECRET_KEY: ${PLANE_SECRET_KEY}
+      DATABASE_URL: postgresql://${DB_USER}:${DB_PASSWORD}@db:5432/${DB_PLANE}
+      REDIS_HOST: ${REDIS_HOST}
+      AMQP_URL: ${AMQP_URL}
+      USE_MINIO: ${USE_MINIO}
+      AWS_ACCESS_KEY_ID: ${MINIO_ROOT_USER}
+      AWS_SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD}
+      AWS_S3_ENDPOINT_URL: ${AWS_S3_ENDPOINT_URL}
+      AWS_S3_BUCKET_NAME: ${AWS_S3_BUCKET_NAME}
+    volumes:
+      - logs_migrator:/code/plane/logs
+    depends_on:
+      db:
+        condition: service_healthy
+
+  # 3.2 Plane API (Backend)
+  plane-api:
+    image: artifacts.plane.so/makeplane/plane-backend:v1.0.0
+    container_name: plane-api
+    command: ./bin/docker-entrypoint-api.sh
+    environment:
+      SECRET_KEY: ${PLANE_SECRET_KEY}
+      DATABASE_URL: postgresql://${DB_USER}:${DB_PASSWORD}@db:5432/${DB_PLANE}
+      REDIS_HOST: ${REDIS_HOST}
+      AMQP_URL: ${AMQP_URL}
+      USE_MINIO: ${USE_MINIO}
+      AWS_ACCESS_KEY_ID: ${MINIO_ROOT_USER}
+      AWS_SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD}
+      AWS_S3_ENDPOINT_URL: ${AWS_S3_ENDPOINT_URL}
+      AWS_S3_BUCKET_NAME: ${AWS_S3_BUCKET_NAME}
+      API_BASE_URL: http://plane-api:8000
+    volumes:
+      - logs_api:/code/plane/logs
+    depends_on:
+      - plane-migrator
+      - db
+      - redis
+      - plane-mq
+    restart: unless-stopped
+
+  # 3.3 Plane Worker
+  plane-worker:
+    image: artifacts.plane.so/makeplane/plane-backend:v1.0.0
+    container_name: plane-worker
+    command: ./bin/docker-entrypoint-worker.sh
+    environment:
+      SECRET_KEY: ${PLANE_SECRET_KEY}
+      DATABASE_URL: postgresql://${DB_USER}:${DB_PASSWORD}@db:5432/${DB_PLANE}
+      REDIS_HOST: ${REDIS_HOST}
+      AMQP_URL: ${AMQP_URL}
+      USE_MINIO: ${USE_MINIO}
+      AWS_ACCESS_KEY_ID: ${MINIO_ROOT_USER}
+      AWS_SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD}
+      AWS_S3_ENDPOINT_URL: ${AWS_S3_ENDPOINT_URL}
+      AWS_S3_BUCKET_NAME: ${AWS_S3_BUCKET_NAME}
+    volumes:
+      - logs_worker:/code/plane/logs
+    depends_on:
+      - plane-api
+      - plane-mq
+    restart: unless-stopped
+
+  # 3.4 Plane Beat Worker (Scheduled Tasks)
+  plane-beat-worker:
+    image: artifacts.plane.so/makeplane/plane-backend:v1.0.0
+    container_name: plane-beat-worker
+    command: ./bin/docker-entrypoint-beat.sh
+    environment:
+      SECRET_KEY: ${PLANE_SECRET_KEY}
+      DATABASE_URL: postgresql://${DB_USER}:${DB_PASSWORD}@db:5432/${DB_PLANE}
+      REDIS_HOST: ${REDIS_HOST}
+      AMQP_URL: ${AMQP_URL}
+      USE_MINIO: ${USE_MINIO}
+      AWS_ACCESS_KEY_ID: ${MINIO_ROOT_USER}
+      AWS_SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD}
+      AWS_S3_ENDPOINT_URL: ${AWS_S3_ENDPOINT_URL}
+      AWS_S3_BUCKET_NAME: ${AWS_S3_BUCKET_NAME}
+    volumes:
+      - logs_beat_worker:/code/plane/logs
+    depends_on:
+      - plane-api
+      - plane-mq
+    restart: unless-stopped
+
+  # 3.5 Plane Web (Frontend)
+  plane-web:
+    image: artifacts.plane.so/makeplane/plane-frontend:v1.0.0
+    container_name: plane-web
+    environment:
+      WEB_URL: http://plane.localhost
+      API_BASE_URL: http://plane-api:8000
+    depends_on:
+      - plane-api
+      - plane-worker
+    restart: unless-stopped
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.plane.rule=Host(`plane.localhost`)"
+      - "traefik.http.routers.plane.entrypoints=websecure"
+      - "traefik.http.routers.plane.tls=true"
+      - "traefik.http.services.plane.loadbalancer.server.port=3000"
+
+  # 3.6 Plane Space (Real-time/Live updates)
+  plane-space:
+    image: artifacts.plane.so/makeplane/plane-space:v1.0.0
+    container_name: plane-space
+    environment:
+      SECRET_KEY: ${PLANE_SECRET_KEY}
+      WEB_URL: http://plane.localhost
+      API_BASE_URL: http://plane-api:8000
+      REDIS_HOST: ${REDIS_HOST}
+    depends_on:
+      - plane-api
+      - plane-worker
+      - plane-web
+    restart: unless-stopped
+
+  # 3.7 Plane Admin
+  plane-admin:
+    image: artifacts.plane.so/makeplane/plane-admin:v1.0.0
+    container_name: plane-admin
+    environment:
+      WEB_URL: http://plane.localhost
+      API_BASE_URL: http://plane-api:8000
+    depends_on:
+      - plane-api
+      - plane-web
+    restart: unless-stopped
+
+  # 3.8 Plane Live (Live communication layer)
+  plane-live:
+    image: artifacts.plane.so/makeplane/plane-live:v1.0.0
+    container_name: plane-live
+    environment:
+      API_BASE_URL: http://plane-api:8000
+      REDIS_HOST: ${REDIS_HOST}
+    depends_on:
+      - plane-api
+      - plane-web
+    restart: unless-stopped
+
+  # --- 4. TRAEFIK (Reverse Proxy and SSL/TLS) ---
+
+  traefik:
+    image: traefik:v2.10
+    container_name: traefik
+    restart: unless-stopped
+    command:
+      - --api.insecure=true
+      - --providers.docker=true
+      - --providers.docker.exposedbydefault=false
+      - --entrypoints.web.address=:80
+      - --entrypoints.websecure.address=:443
+    ports:
+      - "80:80"
+      - "443:443"
+      - "8080"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - traefik_certificates:/etc/traefik/acme
+    labels:
+      # Traefik Dashboard Labels (Access via HTTP and HTTPS)
+      - "traefik.enable=true"
+      # HTTP access
+      - "traefik.http.routers.traefik-dashboard-http.rule=Host(`traefik.localhost`)"
+      - "traefik.http.routers.traefik-dashboard-http.entrypoints=web"
+      - "traefik.http.routers.traefik-dashboard-http.service=api@internal"
+      - "traefik.http.services.api@internal.loadbalancer.server.port=8080"
+      # HTTPS access
+      - "traefik.http.routers.traefik-dashboard-https.rule=Host(`traefik.localhost`)"
+      - "traefik.http.routers.traefik-dashboard-https.entrypoints=websecure"
+      - "traefik.http.routers.traefik-dashboard-https.service=api@internal"
+      - "traefik.http.routers.traefik-dashboard-https.tls=true"
+      - "traefik.http.services.api@internal.loadbalancer.server.port=8080"
+
+volumes:
+  postgres_data:
+  redisdata:
+  minio_data:
+  rabbitmq_data:
+  consul_data:
+  vault_config:
+  vault_file:
+  vault_logs:
+  traefik_certificates:
+  logs_migrator:
+  logs_api:
+  logs_worker:
+  logs_beat_worker:
