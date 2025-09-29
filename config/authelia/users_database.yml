@@ -1,0 +1,16 @@
+---
+users:
+  admin:
+    displayname: "Administrator"
+    password: "$pbkdf2-sha512$310000$c8p78n7pUMln0jzvd4aK4Q$JNRBzwAo0ek5qKOE0xNYmOFl4sIgDOj5KLnYd3a9g25iH4QFGmLQMGRZWaRO3p5gNzIhRLYiRAj5DBJsqPF.8Y" # password
+    email: admin@localhost
+    groups:
+      - admins
+      - dev
+
+  user:
+    displayname: "User"
+    password: "$pbkdf2-sha512$310000$c8p78n7pUMln0jzvd4aK4Q$JNRBzwAo0ek5qKOE0xNYmOFl4sIgDOj5KLnYd3a9g25iH4QFGmLQMGRZWaRO3p5gNzIhRLYiRAj5DBJsqPF.8Y" # password
+    email: user@localhost
+    groups:
+      - dev

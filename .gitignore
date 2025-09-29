@@ -1,0 +1,40 @@
+# Logs and temporary files
+*.log
+*.pid
+consul.log
+vault.log
+nomad.log
+
+# Environment files
+.env
+
+# Docker volumes
+/config/traefik/acme/
+
+# HashiCorp data directories
+/opt/nomad/
+/opt/consul/
+/opt/vault/
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Backup files
+*.bak
+*.backup
+
+# SSL certificates
+*.pem
+*.key
+*.crt
+
+# Temporary directories
+tmp/
+temp/

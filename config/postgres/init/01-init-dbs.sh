@@ -1,0 +1,15 @@
+#!/bin/bash
+set -e
+
+# Create databases for different services
+psql -v ON_ERROR_STOP=1 --username "$POSTGRES_USER" --dbname "$POSTGRES_DB" <<-EOSQL
+    CREATE DATABASE prefect;
+    CREATE DATABASE mlflow;
+    CREATE DATABASE plane;
+    CREATE DATABASE authelia;
+    
+    GRANT ALL PRIVILEGES ON DATABASE prefect TO $POSTGRES_USER;
+    GRANT ALL PRIVILEGES ON DATABASE mlflow TO $POSTGRES_USER;
+    GRANT ALL PRIVILEGES ON DATABASE plane TO $POSTGRES_USER;
+    GRANT ALL PRIVILEGES ON DATABASE authelia TO $POSTGRES_USER;
+EOSQL

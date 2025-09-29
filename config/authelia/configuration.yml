@@ -1,0 +1,158 @@
+---
+theme: dark
+jwt_secret: a_very_important_secret
+default_redirection_url: https://auth.localhost
+
+server:
+  host: 0.0.0.0
+  port: 9091
+
+log:
+  level: debug
+
+totp:
+  issuer: authelia.com
+
+authentication_backend:
+  password_reset:
+    disable: false
+  file:
+    path: /config/users_database.yml
+    password:
+      algorithm: argon2id
+      iterations: 1
+      salt_length: 16
+      parallelism: 8
+      memory: 64
+
+access_control:
+  default_policy: deny
+  rules:
+    # Public endpoints
+    - domain: auth.localhost
+      policy: bypass
+    - domain: traefik.localhost
+      policy: bypass
+    
+    # Protected endpoints requiring authentication
+    - domain: "*.localhost"
+      policy: one_factor
+
+session:
+  name: authelia_session
+  secret: another_very_important_secret
+  expiration: 3600
+  inactivity: 300
+  domain: localhost
+
+  redis:
+    host: redis
+    port: 6379
+
+regulation:
+  max_retries: 3
+  find_time: 120
+  ban_time: 300
+
+storage:
+  encryption_key: you_must_generate_a_random_string_of_more_than_twenty_chars_and_configure_this
+  postgres:
+    host: postgres
+    port: 5432
+    database: authelia
+    username: admin
+    password: secure_password
+
+notifier:
+  smtp:
+    username: test
+    password: password
+    host: mail.example.com
+    port: 587
+    sender: admin@example.com
+    disable_require_tls: true
+
+# OIDC Configuration
+identity_providers:
+  oidc:
+    hmac_secret: this_is_a_secret_abc123abc123abc
+    issuer_private_key: |
+      -----BEGIN RSA PRIVATE KEY-----
+      MIIEpAIBAAKCAQEA4f5wg5l2hKsTeNem/V41fGnJm6gOdrj8ym3rFkEjWT2JnL7z
+      8DpXKhF1lUYs6XWQFQ1+k2eqm1p4z/j6fQl8e3l/dF/y3x1Tr2P2r3I2QI2Qz6Jj
+      ...
+      -----END RSA PRIVATE KEY-----
+    clients:
+      # Prefect OIDC Client
+      - id: prefect
+        description: Prefect Workflow Management
+        secret: '$pbkdf2-sha512$310000$c8p78n7pUMln0jzvd4aK4Q$JNRBzwAo0ek5qKOE0xNYmOFl4sIgDOj5KLnYd3a9g25iH4QFGmLQMGRZWaRO3p5gNzIhRLYiRAj5DBJsqPF.8Y'
+        public: false
+        authorization_policy: one_factor
+        redirect_uris:
+          - https://prefect.localhost/oauth/callback
+        scopes:
+          - openid
+          - profile
+          - email
+        response_types:
+          - code
+        grant_types:
+          - authorization_code
+        response_modes:
+          - form_post
+          - query
+          - fragment
+
+      # MLflow OIDC Client  
+      - id: mlflow
+        description: MLflow ML Tracking
+        secret: '$pbkdf2-sha512$310000$c8p78n7pUMln0jzvd4aK4Q$JNRBzwAo0ek5qKOE0xNYmOFl4sIgDOj5KLnYd3a9g25iH4QFGmLQMGRZWaRO3p5gNzIhRLYiRAj5DBJsqPF.8Y'
+        public: false
+        authorization_policy: one_factor
+        redirect_uris:
+          - https://mlflow.localhost/oauth/callback
+        scopes:
+          - openid
+          - profile
+          - email
+        response_types:
+          - code
+        grant_types:
+          - authorization_code
+
+      # Plane OIDC Client
+      - id: plane
+        description: Plane Project Management
+        secret: '$pbkdf2-sha512$310000$c8p78n7pUMln0jzvd4aK4Q$JNRBzwAo0ek5qKOE0xNYmOFl4sIgDOj5KLnYd3a9g25iH4QFGmLQMGRZWaRO3p5gNzIhRLYiRAj5DBJsqPF.8Y'
+        public: false
+        authorization_policy: one_factor
+        redirect_uris:
+          - https://plane.localhost/oauth/callback
+        scopes:
+          - openid
+          - profile
+          - email
+        response_types:
+          - code
+        grant_types:
+          - authorization_code
+
+      # Vault OIDC Client
+      - id: vault
+        description: HashiCorp Vault
+        secret: '$pbkdf2-sha512$310000$c8p78n7pUMln0jzvd4aK4Q$JNRBzwAo0ek5qKOE0xNYmOFl4sIgDOj5KLnYd3a9g25iH4QFGmLQMGRZWaRO3p5gNzIhRLYiRAj5DBJsqPF.8Y'
+        public: false
+        authorization_policy: one_factor
+        redirect_uris:
+          - https://vault.localhost/ui/vault/auth/oidc/oidc/callback
+          - https://vault.localhost/oidc/callback
+        scopes:
+          - openid
+          - profile
+          - email
+          - groups
+        response_types:
+          - code
+        grant_types:
+          - authorization_code

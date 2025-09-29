@@ -1,0 +1,225 @@
+# Docker Compose configuration for MLOps/DevOps Monolith Platform
+
+networks:
+  mlops-network:
+    driver: bridge
+
+volumes:
+  authelia_data:
+  vault_data:
+  vault_logs:
+  prefect_data:
+  mlflow_data:
+  plane_data:
+  postgres_data:
+  redis_data:
+
+services:
+  # Traefik - Reverse Proxy & Load Balancer
+  traefik:
+    image: traefik:v3.0
+    container_name: traefik
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+      - "8080:8080"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - ./config/traefik:/etc/traefik:ro
+      - ./config/traefik/acme:/acme
+    networks:
+      - mlops-network
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.dashboard.rule=Host(`traefik.localhost`)"
+      - "traefik.http.routers.dashboard.tls=true"
+
+  # HashiCorp Vault - Secret Management
+  vault:
+    image: vault:1.15
+    container_name: vault
+    restart: unless-stopped
+    environment:
+      VAULT_DEV_ROOT_TOKEN_ID: "dev-only-token"
+      VAULT_DEV_LISTEN_ADDRESS: "0.0.0.0:8200"
+    ports:
+      - "8200:8200"
+    volumes:
+      - vault_data:/vault/data
+      - vault_logs:/vault/logs
+      - ./config/vault:/vault/config:ro
+    cap_add:
+      - IPC_LOCK
+    networks:
+      - mlops-network
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.vault.rule=Host(`vault.localhost`)"
+      - "traefik.http.routers.vault.tls=true"
+      - "traefik.http.services.vault.loadbalancer.server.port=8200"
+
+  # PostgreSQL - Database for various services
+  postgres:
+    image: postgres:15
+    container_name: postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: mlops
+      POSTGRES_USER: admin
+      POSTGRES_PASSWORD: secure_password
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./config/postgres/init:/docker-entrypoint-initdb.d:ro
+    networks:
+      - mlops-network
+    ports:
+      - "5432:5432"
+
+  # Redis - Cache and Message Broker
+  redis:
+    image: redis:7-alpine
+    container_name: redis
+    restart: unless-stopped
+    volumes:
+      - redis_data:/data
+    networks:
+      - mlops-network
+    ports:
+      - "6379:6379"
+
+  # Authelia - Authentication and Authorization
+  authelia:
+    image: authelia/authelia:4.38
+    container_name: authelia
+    restart: unless-stopped
+    environment:
+      AUTHELIA_JWT_SECRET: "a_very_important_secret"
+      AUTHELIA_DEFAULT_REDIRECTION_URL: "https://auth.localhost"
+      AUTHELIA_SESSION_SECRET: "another_very_important_secret"
+      AUTHELIA_STORAGE_ENCRYPTION_KEY: "you_must_generate_a_random_string_of_more_than_twenty_chars_and_configure_this"
+    volumes:
+      - authelia_data:/config
+      - ./config/authelia:/config:ro
+    networks:
+      - mlops-network
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.authelia.rule=Host(`auth.localhost`)"
+      - "traefik.http.routers.authelia.tls=true"
+      - "traefik.http.services.authelia.loadbalancer.server.port=9091"
+    depends_on:
+      - postgres
+      - redis
+
+  # Prefect Server - Workflow Management
+  prefect-server:
+    image: prefecthq/prefect:2.14-python3.11
+    container_name: prefect-server
+    restart: unless-stopped
+    environment:
+      PREFECT_UI_URL: "http://127.0.0.1:4200/api"
+      PREFECT_API_URL: "http://127.0.0.1:4200/api"
+      PREFECT_SERVER_API_HOST: "0.0.0.0"
+      PREFECT_API_DATABASE_CONNECTION_URL: "postgresql+asyncpg://admin:secure_password@postgres:5432/prefect"
+    volumes:
+      - prefect_data:/root/.prefect
+    networks:
+      - mlops-network
+    ports:
+      - "4200:4200"
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.prefect.rule=Host(`prefect.localhost`)"
+      - "traefik.http.routers.prefect.tls=true"
+      - "traefik.http.services.prefect.loadbalancer.server.port=4200"
+    depends_on:
+      - postgres
+    command: prefect server start --host 0.0.0.0
+
+  # MLflow - ML Experiment Tracking
+  mlflow:
+    image: python:3.11-slim
+    container_name: mlflow
+    restart: unless-stopped
+    environment:
+      MLFLOW_BACKEND_STORE_URI: "postgresql://admin:secure_password@postgres:5432/mlflow"
+      MLFLOW_DEFAULT_ARTIFACT_ROOT: "/mlflow/artifacts"
+    volumes:
+      - mlflow_data:/mlflow
+      - ./scripts/mlflow-entrypoint.sh:/entrypoint.sh:ro
+    networks:
+      - mlops-network
+    ports:
+      - "5000:5000"
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.mlflow.rule=Host(`mlflow.localhost`)"
+      - "traefik.http.routers.mlflow.tls=true"
+      - "traefik.http.services.mlflow.loadbalancer.server.port=5000"
+    depends_on:
+      - postgres
+    entrypoint: ["/entrypoint.sh"]
+
+  # Plane - Project Management
+  plane-web:
+    image: makeplane/plane-frontend:stable
+    container_name: plane-web
+    restart: unless-stopped
+    environment:
+      NEXT_PUBLIC_API_BASE_URL: "http://plane-api:8000"
+    networks:
+      - mlops-network
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.plane.rule=Host(`plane.localhost`)"
+      - "traefik.http.routers.plane.tls=true"
+      - "traefik.http.services.plane.loadbalancer.server.port=3000"
+    depends_on:
+      - plane-api
+
+  plane-api:
+    image: makeplane/plane-backend:stable
+    container_name: plane-api
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: "postgresql://admin:secure_password@postgres:5432/plane"
+      REDIS_URL: "redis://redis:6379/"
+      SECRET_KEY: "your-secret-key-here"
+    volumes:
+      - plane_data:/app/plane/static
+    networks:
+      - mlops-network
+    depends_on:
+      - postgres
+      - redis
+
+  plane-worker:
+    image: makeplane/plane-backend:stable
+    container_name: plane-worker
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: "postgresql://admin:secure_password@postgres:5432/plane"
+      REDIS_URL: "redis://redis:6379/"
+      SECRET_KEY: "your-secret-key-here"
+    networks:
+      - mlops-network
+    depends_on:
+      - postgres
+      - redis
+    command: ["python", "manage.py", "rqworker"]
+
+  plane-beat:
+    image: makeplane/plane-backend:stable
+    container_name: plane-beat
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: "postgresql://admin:secure_password@postgres:5432/plane"
+      REDIS_URL: "redis://redis:6379/"
+      SECRET_KEY: "your-secret-key-here"
+    networks:
+      - mlops-network
+    depends_on:
+      - postgres
+      - redis
+    command: ["python", "manage.py", "rqscheduler"]

@@ -1,0 +1,54 @@
+http:
+  middlewares:
+    authelia:
+      forwardAuth:
+        address: "http://authelia:9091/api/verify?rd=https://auth.localhost"
+        trustForwardHeader: true
+        authResponseHeaders:
+          - "Remote-User"
+          - "Remote-Groups"
+          - "Remote-Name"
+          - "Remote-Email"
+    
+    secure-headers:
+      headers:
+        accessControlAllowMethods:
+          - GET
+          - OPTIONS
+          - PUT
+        accessControlMaxAge: 100
+        hostsProxyHeaders:
+          - "X-Forwarded-Host"
+        referrerPolicy: "same-origin"
+
+  routers:
+    # Protected routes
+    prefect-secure:
+      rule: "Host(`prefect.localhost`)"
+      entryPoints:
+        - "websecure"
+      middlewares:
+        - "authelia@docker"
+      service: "prefect@docker"
+      tls:
+        certResolver: "letsencrypt"
+    
+    mlflow-secure:
+      rule: "Host(`mlflow.localhost`)"
+      entryPoints:
+        - "websecure"
+      middlewares:
+        - "authelia@docker"
+      service: "mlflow@docker"
+      tls:
+        certResolver: "letsencrypt"
+    
+    plane-secure:
+      rule: "Host(`plane.localhost`)"
+      entryPoints:
+        - "websecure"
+      middlewares:
+        - "authelia@docker"
+      service: "plane@docker"
+      tls:
+        certResolver: "letsencrypt"
